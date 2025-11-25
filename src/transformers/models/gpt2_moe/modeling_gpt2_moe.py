@@ -617,16 +617,16 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache(config=self.config)
 
-        past_seen_tokens = (
+        past_length = (
             past_key_values.get_seq_length() if past_key_values is not None else 0
         )
 
-        if use_cache is None:
-            position_ids = torch.arange(
-                past_seen_tokens,
-                past_seen_tokens + inputs_embeds.shape[1],
-                device=inputs_embeds.device,
-            )
+        position_ids = torch.arange(
+            past_length,
+            input_shape[-1] + past_length,
+            dtype=torch.long,
+            device=device,
+        )
         if position_ids is None:
             position_ids = position_ids.unsqueeze(0)
 
