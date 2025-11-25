@@ -711,10 +711,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList(
-            [
-                GPT2MoEDecoderLayer(config, layer_idx=i)
-                for i in range(config.num_hidden_layers)
-            ]
+            [GPT2MoEDecoderLayer(config, layer_idx=i) for i in range(config.n_layer)]
         )
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
@@ -728,6 +725,74 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         self.wte = new_embeddings
 
     def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> MoeModelOutputWithPast:
+        if (input_ids is None) ^ (inputs_embeds is not None):
+            raise ValueError(
+                "You must specify exactly one of input_ids or inputs_embeds"
+            )
+
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache(config=self.config)
+
+        if inputs_embeds is None:
+            inputs_embeds = self.wte(input_ids)
+
+        if cache_position is None:
+            past_seen_tokens = (
+                past_key_values.get_seq_length() if past_key_values is not None else 0
+            )
+            cache_position = torch.arange(
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+                device=inputs_embeds.device,
+            )
+        if position_ids is None:
+            position_ids = cache_position.unsqueeze(0)
+
+        mask_function = create_causal_mask
+        causal_mask = mask_function(
+            config=self.config,
+            input_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            cache_position=cache_position,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+        )
+
+        hidden_states = inputs_embeds
+
+        # create position embeddings to be shared across the decoder layers
+        position_embeddings = self.wpe(position_ids)
+
+        for decoder_layer in self.h[: self.config.n_layer]:
+            hidden_states = decoder_layer(
+                hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                **kwargs,
+            )
+
+        hidden_states = self.ln_f(hidden_states)
+
+        return MoeModelOutputWithPast(  # only diff with Mistral is the output type, we need MoE
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_values,
+        )
+
+    def _forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
@@ -835,7 +900,9 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
                 use_cache=use_cache,
             )
 
+            print("outputs", outputs.shape, outputs)
             hidden_states = outputs[0]
+            print("hidden_states", hidden_states.shape, hidden_states)
             if use_cache is True:
                 presents = presents + (outputs[1],)
 
