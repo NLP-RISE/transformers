@@ -621,7 +621,7 @@ class GPT2MoEDecoderLayer(nn.Module):
         hidden_states = self.ln_2(hidden_states)
 
         # Self Attention
-        hidden_states, _ = self.self_attn(
+        hidden_states, _ = self.attn(
             hidden_states=hidden_states,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
