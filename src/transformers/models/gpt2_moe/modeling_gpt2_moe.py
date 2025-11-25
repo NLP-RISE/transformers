@@ -841,6 +841,12 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             labels in `[0, ..., config.vocab_size]`
         """
 
+        output_router_logits = (
+            output_router_logits
+            if output_router_logits is not None
+            else self.config.output_router_logits
+        )
+
         transformer_outputs = self.transformer(
             input_ids,
             past_key_values=past_key_values,
