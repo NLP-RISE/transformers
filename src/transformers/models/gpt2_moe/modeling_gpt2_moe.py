@@ -154,6 +154,60 @@ def load_balancing_loss_func(
     return overall_loss * num_experts
 
 
+def eager_attention_forward(
+    module, query, key, value, attention_mask, head_mask=None, **kwargs
+):
+    attn_weights = torch.matmul(query, key.transpose(-1, -2))
+
+    if module.scale_attn_weights:
+        attn_weights = attn_weights / torch.full(
+            [],
+            value.size(-1) ** 0.5,
+            dtype=attn_weights.dtype,
+            device=attn_weights.device,
+        )
+
+    # Layer-wise attention scaling
+    if module.scale_attn_by_inverse_layer_idx:
+        attn_weights = attn_weights / float(module.layer_idx + 1)
+
+    if not module.is_cross_attention:
+        # if only "normal" attention layer implements causal mask
+        query_length, key_length = query.size(-2), key.size(-2)
+        causal_mask = module.bias[
+            :, :, key_length - query_length : key_length, :key_length
+        ]
+        mask_value = torch.finfo(attn_weights.dtype).min
+        # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
+        # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
+        mask_value = torch.full(
+            [], mask_value, dtype=attn_weights.dtype, device=attn_weights.device
+        )
+        attn_weights = torch.where(
+            causal_mask, attn_weights.to(attn_weights.dtype), mask_value
+        )
+
+    if attention_mask is not None:
+        # Apply the attention mask
+        causal_mask = attention_mask[:, :, :, : key.shape[-2]]
+        attn_weights = attn_weights + causal_mask
+
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+    # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
+    attn_weights = attn_weights.type(value.dtype)
+    attn_weights = module.attn_dropout(attn_weights)
+
+    # Mask heads if we want to
+    if head_mask is not None:
+        attn_weights = attn_weights * head_mask
+
+    attn_output = torch.matmul(attn_weights, value)
+    attn_output = attn_output.transpose(1, 2)
+
+    return attn_output, attn_weights
+
+
 # from gpt2
 class GPT2Attention(nn.Module):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
