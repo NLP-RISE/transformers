@@ -323,7 +323,7 @@ class GPT2MoEFeedForward(nn.Module):
 
 
 # from org
-class MixtureOfExperts(nn.Module):
+class GPT2MoESparseMoeBlock(nn.Module):
     """This class implements the Mixture-Of-Experts derived from Mixtral."""
 
     def __init__(self, intermediate_size, config):
@@ -431,7 +431,7 @@ class MixtureOfExperts(nn.Module):
 
 
 # from org
-class GPT2MoEBlock(nn.Module):
+class GPT2MoEDecoderLayer(nn.Module):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         hidden_size = config.hidden_size
@@ -445,7 +445,7 @@ class GPT2MoEBlock(nn.Module):
         self.attn = GPT2MoEAttention(config=config, layer_idx=layer_idx)
         self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
-        self.moe = MixtureOfExperts(inner_dim, config)
+        self.moe = GPT2MoESparseMoeBlock(inner_dim, config)
 
     def forward(
         self,
@@ -502,7 +502,7 @@ class GPT2MoEPreTrainedModel(PreTrainedModel):
     config_class = GPT2MoEConfig
     base_model_prefix = "transformer"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["GPT2MoEBlock"]
+    _no_split_modules = ["GPT2MoEDecoderLayer"]
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
     _supports_sdpa = True
@@ -562,7 +562,10 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList(
-            [GPT2MoEBlock(config, layer_idx=i) for i in range(config.num_hidden_layers)]
+            [
+                GPT2MoEDecoderLayer(config, layer_idx=i)
+                for i in range(config.num_hidden_layers)
+            ]
         )
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
@@ -611,17 +614,17 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         if token_type_ids is not None:
             token_type_ids = token_type_ids.view(-1, input_shape[-1])
 
-        if past_key_values is None:
-            past_length = 0
-            past_key_values = tuple([None] * len(self.h))
-        else:
-            past_length = past_key_values[0][0].size(-2)
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache(config=self.config)
+
+        past_seen_tokens = (
+            past_key_values.get_seq_length() if past_key_values is not None else 0
+        )
 
         position_ids = torch.arange(
-            past_length,
-            input_shape[-1] + past_length,
-            dtype=torch.long,
-            device=device,
+            past_seen_tokens,
+            past_seen_tokens + inputs_embeds.shape[1],
+            device=inputs_embeds.device,
         )
         position_ids = position_ids.unsqueeze(0)
 
