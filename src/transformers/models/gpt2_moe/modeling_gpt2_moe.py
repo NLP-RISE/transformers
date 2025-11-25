@@ -621,12 +621,14 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
             past_key_values.get_seq_length() if past_key_values is not None else 0
         )
 
-        position_ids = torch.arange(
-            past_seen_tokens,
-            past_seen_tokens + inputs_embeds.shape[1],
-            device=inputs_embeds.device,
-        )
-        position_ids = position_ids.unsqueeze(0)
+        if use_cache is None:
+            position_ids = torch.arange(
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+                device=inputs_embeds.device,
+            )
+        if position_ids is None:
+            position_ids = position_ids.unsqueeze(0)
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
