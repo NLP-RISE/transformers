@@ -821,12 +821,13 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
 
         presents = () if use_cache else None
         all_router_logits = () if output_router_logits else None
-
+        position_embeddings = self.wpe(position_ids)
+        print("position_embeddings", position_embeddings.shape, position_embeddings)
         for i in range(len(self.h)):
             block, layer_past = self.h[i], past_key_values[i]
-
             outputs = block(
                 hidden_states,
+                position_embeddings=position_embeddings,
                 layer_past=layer_past,
                 attention_mask=attention_mask,
                 head_mask=head_mask[i],
