@@ -60,6 +60,7 @@ class GPT2MoEConfig(PretrainedConfig):
         top_k_expert=2,
         router_aux_loss_coef=4e-2,
         scale_down_ffn=1,
+        output_router_logits=True,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -91,6 +92,7 @@ class GPT2MoEConfig(PretrainedConfig):
         self.router_aux_loss_coef = router_aux_loss_coef
 
         self.scale_down_ffn = scale_down_ffn
+        self.output_router_logits = output_router_logits
 
         super().__init__(
             bos_token_id=bos_token_id,
