@@ -62,32 +62,29 @@ from ...utils import TransformersKwargs
 logger = logging.get_logger(__name__)
 
 
-# from org
+# from. mixtral
 def load_balancing_loss_func(
-    gate_logits: Union[torch.Tensor, Tuple[torch.Tensor], None],
+    gate_logits: Union[torch.Tensor, tuple[torch.Tensor], None],
     num_experts: Optional[int] = None,
     top_k=2,
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Union[torch.Tensor, int]:
-    """
-    Computes auxiliary load balancing loss as in Switch Transformer -
-    implemented in Pytorch.
+    r"""
+    Computes auxiliary load balancing loss as in Switch Transformer - implemented in Pytorch.
 
-    See Switch Transformer (https://arxiv.org/abs/2101.03961) for more details.
-    This function implements the loss function presented in equations (4) - (6)
-    of the paper. It aims at penalizing cases where the routing between
+    See Switch Transformer (https://huggingface.co/papers/2101.03961) for more details. This function implements the loss
+    function presented in equations (4) - (6) of the paper. It aims at penalizing cases where the routing between
     experts is too unbalanced.
 
     Args:
         gate_logits:
-            Logits from the `gate`, should be a tuple of
-            model.config.num_hidden_layers tensors of shape
-            [batch_size X sequence_length, num_experts].
+            Logits from the `gate`, should be a tuple of model.config.num_hidden_layers tensors of
+            shape [batch_size X sequence_length, num_experts].
         num_experts:
             Number of experts
         top_k:
-            The number of experts to route per-token, can be also interpreted
-            as the `top-k` routing parameter.
+            The number of experts to route per-token, can be also interpreted as the `top-k` routing
+            parameter.
         attention_mask (`torch.Tensor`, *optional*):
             The attention_mask used in forward function
             shape [batch_size X sequence_length] if not None.
@@ -101,15 +98,14 @@ def load_balancing_loss_func(
     if isinstance(gate_logits, tuple):
         compute_device = gate_logits[0].device
         concatenated_gate_logits = torch.cat(
-            [layer_gate.to(compute_device) for layer_gate in gate_logits],
-            dim=0,
+            [layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0
         )
 
-    routing_weights = F.softmax(concatenated_gate_logits, dim=-1)
+    routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
 
     _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
 
-    expert_mask = F.one_hot(selected_experts, num_experts)
+    expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
 
     if attention_mask is None:
         # Compute the percentage of tokens routed to each experts
@@ -123,8 +119,7 @@ def load_balancing_loss_func(
             batch_size * sequence_length
         )
 
-        # Compute the mask that masks all padding tokens as 0 with the same
-        # shape of expert_mask
+        # Compute the mask that masks all padding tokens as 0 with the same shape of expert_mask
         expert_attention_mask = (
             attention_mask[None, :, :, None, None]
             .expand(
@@ -139,8 +134,7 @@ def load_balancing_loss_func(
             expert_mask.float() * expert_attention_mask, dim=0
         ) / torch.sum(expert_attention_mask, dim=0)
 
-        # Compute the mask that masks all padding tokens as 0 with the same
-        # shape of tokens_per_expert
+        # Compute the mask that masks all padding tokens as 0 with the same shape of tokens_per_expert
         router_per_expert_attention_mask = (
             attention_mask[None, :, :, None]
             .expand((num_hidden_layers, batch_size, sequence_length, num_experts))
