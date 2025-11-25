@@ -56,6 +56,9 @@ from .configuration_gpt2_moe import GPT2MoEConfig
 from typing import Tuple
 import torch.nn.functional as F
 
+from ...processing_utils import Unpack
+from ...utils import TransformersKwargs
+
 logger = logging.get_logger(__name__)
 
 
@@ -605,54 +608,37 @@ class GPT2MoEDecoderLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: Optional[Tuple[torch.FloatTensor]],
+        hidden_states: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        layer_past: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        output_router_logits: Optional[bool] = None,
-        use_cache: Optional[bool] = False,
-        output_attentions: Optional[bool] = False,
-        *args,
-        **kwargs,
-    ) -> Union[
-        Tuple[torch.Tensor],
-        Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]],
-    ]:
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> torch.FloatTensor:
         residual = hidden_states
-        hidden_states = self.ln_1(hidden_states)
-        attn_output, self_attn_weights = self.attn(
-            hidden_states,
+
+        hidden_states = self.ln_2(hidden_states)
+
+        # Self Attention
+        hidden_states, _ = self.self_attn(
+            hidden_states=hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
             past_key_values=past_key_values,
             cache_position=cache_position,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
             **kwargs,
         )
+        hidden_states = residual + hidden_states
 
-        # attn_output = attn_outputs[0]
-        # outputs = attn_outputs[1:]
-        # residual connection
-        hidden_states = attn_output + residual
-
+        # Fully Connected
         residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
-        feed_forward_hidden_states, router_logits = self.moe(hidden_states)
-        # residual connection
-        hidden_states = residual + feed_forward_hidden_states
+        hidden_states, _ = self.moe(hidden_states)
+        hidden_states = residual + hidden_states
 
-        if use_cache:
-            outputs = (hidden_states,) + outputs
-        else:
-            outputs = (hidden_states,) + outputs[1:]
-
-        if output_router_logits:
-            outputs = outputs + (router_logits,)
-
-        return outputs
+        return hidden_states
 
 
 # from org
