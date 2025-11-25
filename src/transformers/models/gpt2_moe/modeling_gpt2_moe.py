@@ -39,6 +39,12 @@ from ...modeling_outputs import (
     MoeModelOutputWithPast,
     MoeCausalLMOutputWithPast,
 )
+from ...modeling_layers import (
+    GenericForQuestionAnswering,
+    GenericForSequenceClassification,
+    GenericForTokenClassification,
+    GradientCheckpointingLayer,
+)
 from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from ...pytorch_utils import Conv1D
 from ...utils import (
@@ -544,13 +550,6 @@ class GPT2MoEPreTrainedModel(PreTrainedModel):
                 )
 
 
-@dataclass
-@auto_docstring(
-    custom_intro="""
-    Base class for outputs of models predicting if two sentences are consecutive or not.
-    """
-)
-
 # from org
 class GPT2MoEModel(GPT2MoEPreTrainedModel):
     def __init__(self, config):
@@ -792,8 +791,27 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         )
 
 
+class GPT2MoEForSequenceClassification(
+    GenericForSequenceClassification, GPT2MoEPreTrainedModel
+):
+    pass
+
+
+class GPT2MoEForTokenClassification(
+    GenericForTokenClassification, GPT2MoEPreTrainedModel
+):
+    pass
+
+
+class GPT2MoEForQuestionAnswering(GenericForQuestionAnswering, GPT2MoEPreTrainedModel):
+    pass
+
+
 __all__ = [
     "GPT2MoEModel",
     "GPT2MoEPreTrainedModel",
     "GPT2MoEForCausalLM",
+    "GPT2MoEForQuestionAnswering",
+    "GPT2MoEForTokenClassification",
+    "GPT2MoEForSequenceClassification",
 ]
