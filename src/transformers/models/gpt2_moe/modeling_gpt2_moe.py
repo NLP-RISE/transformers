@@ -606,11 +606,14 @@ class GPT2MoEDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: Optional[Tuple[torch.FloatTensor]],
+        past_key_values: Optional[Cache] = None,
+        cache_position: Optional[torch.LongTensor] = None,
         layer_past: Optional[Tuple[torch.Tensor]] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
         output_router_logits: Optional[bool] = None,
         use_cache: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
         *args,
         **kwargs,
     ) -> Union[
@@ -619,15 +622,19 @@ class GPT2MoEDecoderLayer(nn.Module):
     ]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
-        attn_outputs = self.attn(
+        attn_output, self_attn_weights = self.attn(
             hidden_states,
-            layer_past=layer_past,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
             attention_mask=attention_mask,
             head_mask=head_mask,
             use_cache=use_cache,
+            output_attentions=output_attentions,
+            **kwargs,
         )
-        attn_output = attn_outputs[0]
-        outputs = attn_outputs[1:]
+
+        # attn_output = attn_outputs[0]
+        # outputs = attn_outputs[1:]
         # residual connection
         hidden_states = attn_output + residual
 
