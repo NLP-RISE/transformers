@@ -799,6 +799,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         self.num_expert = config.n_expert
         self.k = config.top_k_expert
         self.router_aux_loss_coef = config.router_aux_loss_coef
+        self.vocab_size = config.vocab_size
 
         # Initialize weights and apply final processing
         self.post_init()
