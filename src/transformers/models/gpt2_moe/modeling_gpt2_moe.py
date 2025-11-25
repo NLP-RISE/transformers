@@ -794,6 +794,6 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
 
 __all__ = [
     "GPT2MoEModel",
-    "GPT2MoEMoEPreTrainedModel",
+    "GPT2MoEPreTrainedModel",
     "GPT2MoEForCausalLM",
 ]
