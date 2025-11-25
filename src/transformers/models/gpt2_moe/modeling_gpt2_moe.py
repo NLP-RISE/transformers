@@ -561,7 +561,7 @@ class GPT2MoESparseMoeBlock(nn.Module):
 
 
 # from org
-class GPT2MoEDecoderLayer(nn.Module):
+class fGPT2MoEDecoderLayer(nn.Module):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         hidden_size = config.hidden_size
@@ -606,11 +606,11 @@ class GPT2MoEDecoderLayer(nn.Module):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
-        hidden_states, _ = self.moe(hidden_states)
+        hidden_states, router_logits = self.moe(hidden_states)
         hidden_states = residual + hidden_states
 
-        print("mystery _", _.shape, _)
-        return hidden_states
+        print("mystery router_logits", router_logits.shape, router_logits)
+        return hidden_states, router_logits
 
 
 # from org
@@ -751,7 +751,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         position_embeddings = self.wpe(position_ids)
 
         for decoder_layer in self.h[: self.config.n_layer]:
-            hidden_states = decoder_layer(
+            hidden_states, router_logits = decoder_layer(
                 hidden_states,
                 position_embeddings=position_embeddings,
                 attention_mask=causal_mask,
@@ -760,6 +760,12 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
                 use_cache=use_cache,
                 cache_position=cache_position,
                 **kwargs,
+            )
+
+            print(
+                "router_logits in GPT2MoEModel forward",
+                router_logits.shape,
+                router_logits,
             )
 
         hidden_states = self.ln_f(hidden_states)
