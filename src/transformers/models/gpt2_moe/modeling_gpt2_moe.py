@@ -770,9 +770,10 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
 
         hidden_states = self.ln_f(hidden_states)
 
-        return MoeModelOutputWithPast(  # only diff with Mistral is the output type, we need MoE
+        return MoeModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
+            router_logits=router_logits,
         )
 
 
