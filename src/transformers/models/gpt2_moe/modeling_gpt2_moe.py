@@ -94,8 +94,8 @@ def load_balancing_loss_func(
         The auxiliary loss.
     """
 
-    print("LB gate logits", gate_logits)
-    print("LB attention_mask", attention_mask)
+    print("LB gate logits", gate_logits.shape)
+    print("LB attention_mask", attention_mask.shape)
     if gate_logits is None or not isinstance(gate_logits, tuple):
         return 0
 
@@ -146,12 +146,14 @@ def load_balancing_loss_func(
             .to(compute_device)
         )
 
-        print("router_per_expert_attention_mask", router_per_expert_attention_mask)
+        print(
+            "router_per_expert_attention_mask", router_per_expert_attention_mask.shape
+        )
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.sum(
             routing_weights * router_per_expert_attention_mask, dim=0
         ) / torch.sum(router_per_expert_attention_mask, dim=0)
-        print("router_prob_per_expert")
+        print("router_prob_per_expert", router_prob_per_expert.shape)
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
     print("overall_loss", overall_loss)
 
@@ -857,7 +859,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        print("router logits", outputs.router_logits)
+        print("router logits", outputs.router_logits.shape)
 
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
