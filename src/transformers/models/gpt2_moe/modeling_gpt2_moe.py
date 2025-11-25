@@ -58,6 +58,7 @@ import torch.nn.functional as F
 
 from ...processing_utils import Unpack
 from ...utils import TransformersKwargs
+from ...utils.generic import OutputRecorder
 
 logger = logging.get_logger(__name__)
 
@@ -92,6 +93,9 @@ def load_balancing_loss_func(
     Returns:
         The auxiliary loss.
     """
+
+    print("LB gate logits", gate_logits)
+    print("LB attention_mask", attention_mask)
     if gate_logits is None or not isinstance(gate_logits, tuple):
         return 0
 
@@ -142,12 +146,15 @@ def load_balancing_loss_func(
             .to(compute_device)
         )
 
+        print("router_per_expert_attention_mask", router_per_expert_attention_mask)
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.sum(
             routing_weights * router_per_expert_attention_mask, dim=0
         ) / torch.sum(router_per_expert_attention_mask, dim=0)
-
+        print("router_prob_per_expert")
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
+    print("overall_loss", overall_loss)
+
     return overall_loss * num_experts
 
 
@@ -549,38 +556,8 @@ class GPT2MoESparseMoeBlock(nn.Module):
         final_hidden_states = final_hidden_states.reshape(
             batch_size, sequence_length, hidden_dim
         )
+        print("router_logits in sparse MoE block", router_logits.shape, router_logits)
         return final_hidden_states, router_logits
-
-
-# from org
-# class Conv1D(nn.Module):
-#     """
-#     1D-convolutional layer as defined by Radford et al. for OpenAI GPT
-#     (and also used in GPT-2).
-#
-#     Basically works like a linear layer but the weights are transposed.
-#
-#     Args:
-#         nf (`int`): The number of output features.
-#         nx (`int`): The number of input features.
-#     """
-#
-#     def __init__(self, nf, nx):
-#         super().__init__()
-#         self.nf = nf
-#         self.nx = nx
-#         self.weight = nn.Parameter(torch.empty(nx, nf))
-#         self.bias = nn.Parameter(torch.zeros(nf))
-#         nn.init.normal_(self.weight, std=0.02)
-#
-#     def __repr__(self) -> str:
-#         return "Conv1D(nf={nf}, nx={nx})".format(**self.__dict__)
-#
-#     def forward(self, x):
-#         size_out = x.size()[:-1] + (self.nf,)
-#         x = torch.addmm(self.bias, x.view(-1, x.size(-1)), self.weight)
-#         x = x.view(size_out)
-#         return x
 
 
 # from org
@@ -632,6 +609,7 @@ class GPT2MoEDecoderLayer(nn.Module):
         hidden_states, _ = self.moe(hidden_states)
         hidden_states = residual + hidden_states
 
+        print("mystery _", _.shape, _)
         return hidden_states
 
 
@@ -649,6 +627,11 @@ class GPT2MoEPreTrainedModel(PreTrainedModel):
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
     _supports_sdpa = True
+    _can_record_outputs = {
+        "router_logits": OutputRecorder(GPT2MoESparseMoeBlock, index=1),
+        "hidden_states": GPT2MoEDecoderLayer,
+        "attentions": GPT2Attention,
+    }
 
     def __init__(self, *inputs, **kwargs):
         super().__init__(*inputs, **kwargs)
@@ -853,6 +836,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             else self.config.output_router_logits
         )
 
+        print("output_router_logits?", output_router_logits)
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs: MoeModelOutputWithPast = self.transformer(
             input_ids=input_ids,
@@ -865,6 +849,8 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             cache_position=cache_position,
             **kwargs,
         )
+
+        print("router logits", outputs.router_logits)
 
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
@@ -879,6 +865,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits, labels, self.vocab_size, **kwargs)
 
+        print("loss", loss)
         aux_loss = None
         if output_router_logits:
             aux_loss = load_balancing_loss_func(
@@ -887,6 +874,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
                 self.k,
                 attention_mask,
             )
+            print("aux_loss", aux_loss)
             if labels is not None:
                 loss += self.router_aux_loss_coef * aux_loss.to(
                     loss.device
