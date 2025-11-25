@@ -882,8 +882,8 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         if output_router_logits:
             aux_loss = load_balancing_loss_func(
                 outputs.router_logits,
-                self.num_experts,
-                self.num_experts_per_tok,
+                self.num_expert,
+                self.k,
                 attention_mask,
             )
             if labels is not None:
