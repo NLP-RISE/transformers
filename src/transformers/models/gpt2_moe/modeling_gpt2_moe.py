@@ -853,7 +853,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         )
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs: MoeModelOutputWithPast = self.model(
+        outputs: MoeModelOutputWithPast = self.transformer(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
