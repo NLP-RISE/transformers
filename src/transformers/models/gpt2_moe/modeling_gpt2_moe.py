@@ -561,7 +561,7 @@ class GPT2MoESparseMoeBlock(nn.Module):
 
 
 # from org
-class fGPT2MoEDecoderLayer(nn.Module):
+class GPT2MoEDecoderLayer(nn.Module):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         hidden_size = config.hidden_size
