@@ -94,35 +94,48 @@ def load_balancing_loss_func(
         The auxiliary loss.
     """
 
-    print("LB gate logits", gate_logits)
-    print("LB attention_mask", attention_mask)
+    # print("LB gate logits", type(gate_logits))
+    # print("LB attention_mask", attention_mask)
     if gate_logits is None or not isinstance(gate_logits, tuple):
+        # print(
+        #    "gate_logits is None or not isinstance(gate_logits, tuple)",
+        #    type(gate_logits),
+        # )
         return 0
 
     if isinstance(gate_logits, tuple):
+        # print("gate logits are tuple")
         compute_device = gate_logits[0].device
+        # print("compute device", compute_device)
         concatenated_gate_logits = torch.cat(
             [layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0
         )
+        # print("concat logits", type(concatenated_gate_logits))
 
     routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
 
+    # print("routing_weights", routing_weights)
     _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
 
+    # print("selected_experts", selected_experts)
     expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
-
+    # print("expert_mask", type(expert_mask))
     if attention_mask is None:
+        # print("no attention mask!!")
         # Compute the percentage of tokens routed to each experts
         tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
 
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.mean(routing_weights, dim=0)
     else:
+        # print("attention mask present")
         batch_size, sequence_length = attention_mask.shape
         num_hidden_layers = concatenated_gate_logits.shape[0] // (
             batch_size * sequence_length
         )
 
+        # print("batch_size, sequence_length", batch_size, sequence_length)
+        # print("num_hidden_layers", num_hidden_layers)
         # Compute the mask that masks all padding tokens as 0 with the same shape of expert_mask
         expert_attention_mask = (
             attention_mask[None, :, :, None, None]
@@ -132,6 +145,7 @@ def load_balancing_loss_func(
             .reshape(-1, top_k, num_experts)
             .to(compute_device)
         )
+        # print("expert_attention_mask", expert_attention_mask)
 
         # Compute the percentage of tokens routed to each experts
         tokens_per_expert = torch.sum(
@@ -146,15 +160,17 @@ def load_balancing_loss_func(
             .to(compute_device)
         )
 
-        print("router_per_expert_attention_mask", router_per_expert_attention_mask)
+        # print(
+        #    "router_per_expert_attention_mask", type(router_per_expert_attention_mask)
+        # )
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.sum(
             routing_weights * router_per_expert_attention_mask, dim=0
         ) / torch.sum(router_per_expert_attention_mask, dim=0)
-        print("router_prob_per_expert", router_prob_per_expert)
+        # print("router_prob_per_expert", type(router_prob_per_expert))
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
-    print("overall_loss", overall_loss)
-
+    # print("overall_loss", overall_loss)
+    # print("returning", overall_loss * num_experts)
     return overall_loss * num_experts
 
 
@@ -514,6 +530,9 @@ class GPT2SparseMoEBlock(nn.Module):
 
         router_logits = self.gating_network(hidden_states)
 
+        # print("router logits from gating function", type(router_logits))
+        # print("printout", router_logits)
+
         router_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(router_weights, k=self.k, dim=-1)
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
@@ -556,12 +575,19 @@ class GPT2SparseMoEBlock(nn.Module):
         final_hidden_states = final_hidden_states.reshape(
             batch_size, sequence_length, hidden_dim
         )
-        print("router_logits in sparse MoE block", router_logits)
-        return final_hidden_states, router_logits
+        # print(
+        #    "router_logits in sparse MoE block",
+        #    type(router_logits),
+        #    "will be returned as tuple",
+        # )
+        return final_hidden_states, (
+            router_logits,
+            router_logits,
+        )  # (router_logits, router_logits)
 
 
 # from org
-class GPT2MoEDecoderLayer(nn.Module):
+class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         hidden_size = config.hidden_size
@@ -609,11 +635,12 @@ class GPT2MoEDecoderLayer(nn.Module):
         hidden_states, router_logits = self.moe(hidden_states)
         hidden_states = residual + hidden_states
 
-        print(
-            "mystery router_logits",
-            router_logits,
-        )
-        return hidden_states  # , router_logits
+        # print(
+        #    "router logits of layer",
+        #    type(router_logits),
+        # )
+
+        return hidden_states, router_logits
 
 
 # from org
@@ -627,7 +654,7 @@ class GPT2MoEPreTrainedModel(PreTrainedModel):
     base_model_prefix = "transformer"
     supports_gradient_checkpointing = True
     _no_split_modules = ["GPT2MoEDecoderLayer"]
-    _skip_keys_device_placement = "past_key_values"
+    _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
     _can_record_outputs = {
@@ -754,7 +781,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         position_embeddings = self.wpe(position_ids)
 
         for decoder_layer in self.h[: self.config.n_layer]:
-            hidden_states = decoder_layer(
+            hidden_states, router_logits = decoder_layer(
                 hidden_states,
                 position_embeddings=position_embeddings,
                 attention_mask=causal_mask,
@@ -764,13 +791,15 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
                 cache_position=cache_position,
                 **kwargs,
             )
+            # print("tmp router logits", type(router_logits))
 
         hidden_states = self.ln_f(hidden_states)
+        # print("router_logits out of gpt2moeblock", type(router_logits))
 
         return MoeModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
-            #          router_logits=router_logits,
+            router_logits=router_logits,
         )
 
 
@@ -840,7 +869,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             else self.config.output_router_logits
         )
 
-        print("output_router_logits?", output_router_logits)
+        # print("output_router_logits?", type(output_router_logits))
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs: MoeModelOutputWithPast = self.transformer(
             input_ids=input_ids,
@@ -854,7 +883,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        print("router logits", outputs.router_logits)
+        # print("router logits", type(outputs.router_logits))
 
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
