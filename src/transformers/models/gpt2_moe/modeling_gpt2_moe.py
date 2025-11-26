@@ -612,7 +612,7 @@ class GPT2MoEDecoderLayer(nn.Module):
         hidden_states = residual + hidden_states
 
         print("mystery router_logits", router_logits.shape, router_logits)
-        return hidden_states, router_logits
+        return hidden_states  # , router_logits
 
 
 # from org
@@ -775,7 +775,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         return MoeModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
-            router_logits=router_logits,
+            #          router_logits=router_logits,
         )
 
 
