@@ -765,11 +765,6 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
                 **kwargs,
             )
 
-            print(
-                "router_logits in GPT2MoEModel forward",
-                router_logits,
-            )
-
         hidden_states = self.ln_f(hidden_states)
 
         return MoeModelOutputWithPast(
