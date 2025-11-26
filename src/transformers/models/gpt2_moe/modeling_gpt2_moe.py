@@ -69,9 +69,9 @@ logger = logging.get_logger(__name__)
 class GPT2MoEFeedForward(nn.Module):
     """This class implements the feed-forward network derived from Llama2."""
 
-    def __init__(self, config: GPT2MoEConfig):
+    def __init__(self, intermediate_size, config: GPT2MoEConfig):
         super().__init__()
-        self.ffn_dim = config.intermediate_size
+        self.ffn_dim = intermediate_size
         self.hidden_dim = config.hidden_size
 
         self.w1 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
