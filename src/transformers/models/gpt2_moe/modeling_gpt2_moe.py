@@ -50,6 +50,7 @@ from ...pytorch_utils import Conv1D
 from ...utils import (
     ModelOutput,
     auto_docstring,
+    can_return_tuple
     logging,
 )
 from .configuration_gpt2_moe import GPT2MoEConfig
@@ -59,6 +60,7 @@ import torch.nn.functional as F
 from ...processing_utils import Unpack
 from ...utils import TransformersKwargs
 from ...utils.generic import OutputRecorder
+from transformers.utils.generic import check_model_inputs
 
 logger = logging.get_logger(__name__)
 
@@ -731,6 +733,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
     def set_input_embeddings(self, new_embeddings):
         self.wte = new_embeddings
 
+    @check_model_inputs
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -799,13 +802,14 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         return MoeModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
-            router_logits=router_logits,
+            # router_logits=router_logits,
         )
 
 
 # from org
 class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
+    _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
     def __init__(self, config):
         super().__init__(config)
@@ -826,6 +830,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
+    @can_return_tuple
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
