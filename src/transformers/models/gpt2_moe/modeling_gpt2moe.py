@@ -79,6 +79,7 @@ class GPT2MoEFeedForward(nn.Module):
         self.w3 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
 
         self.act_fn = ACT2FN[config.hidden_act]
+        print("self.act_fn", self.act_fn)
 
     def forward(self, hidden_states):
         current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(
