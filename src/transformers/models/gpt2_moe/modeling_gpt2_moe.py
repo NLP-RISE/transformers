@@ -811,6 +811,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
 # from org
 class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
+    _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
     def __init__(self, config):
