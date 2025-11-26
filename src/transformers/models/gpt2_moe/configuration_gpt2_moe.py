@@ -61,6 +61,7 @@ class GPT2MoEConfig(PretrainedConfig):
         router_aux_loss_coef=4e-2,
         scale_down_ffn=1,
         output_router_logits=True,
+        hidden_act="gelu_new",
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -93,6 +94,7 @@ class GPT2MoEConfig(PretrainedConfig):
 
         self.scale_down_ffn = scale_down_ffn
         self.output_router_logits = output_router_logits
+        self.hidden_act = "gelu_new"
 
         super().__init__(
             bos_token_id=bos_token_id,

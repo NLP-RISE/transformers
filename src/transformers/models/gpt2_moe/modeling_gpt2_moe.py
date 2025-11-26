@@ -69,23 +69,23 @@ logger = logging.get_logger(__name__)
 class GPT2MoEFeedForward(nn.Module):
     """This class implements the feed-forward network derived from Llama2."""
 
-    def __init__(self, intermediate_size, config):
+    def __init__(self, config: GPT2MoEConfig):
         super().__init__()
+        self.ffn_dim = config.intermediate_size
+        self.hidden_dim = config.hidden_size
 
-        self.config = config
+        self.w1 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
+        self.w2 = nn.Linear(self.ffn_dim, self.hidden_dim, bias=False)
+        self.w3 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
 
-        self.w1 = nn.Linear(config.n_embd, intermediate_size, bias=False)
-        self.w2 = nn.Linear(intermediate_size, config.n_embd, bias=False)
-        self.w3 = nn.Linear(config.n_embd, intermediate_size, bias=False)
-        self.activation = nn.SiLU()
-        # self.dropout = nn.Dropout(config.resid_pdrop)
+        self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states):
-        hidden_states = self.w2(
-            self.activation(self.w1(hidden_states)) * self.w3(hidden_states)
+        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(
+            hidden_states
         )
-        # hidden_states = self.dropout(hidden_states)  # ??? is this the problem?
-        return hidden_states
+        current_hidden_states = self.w2(current_hidden_states)
+        return current_hidden_states
 
 
 # from org
