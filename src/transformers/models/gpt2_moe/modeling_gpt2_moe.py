@@ -582,10 +582,12 @@ class GPT2SparseMoEBlock(nn.Module):
         #    type(router_logits),
         #    "will be returned as tuple",
         # )
-        return final_hidden_states, (
-            router_logits,
-            router_logits,
-        )  # (router_logits, router_logits)
+        return final_hidden_states
+    
+    #, (
+    #        router_logits,
+    #        router_logits,
+    #    )  # (router_logits, router_logits)
 
 
 # from org
