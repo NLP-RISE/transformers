@@ -18,8 +18,8 @@ from ...utils.import_utils import define_import_structure
 
 
 if TYPE_CHECKING:
-    from .configuration_gpt2_moe import *
-    from .modeling_gpt2_moe import *
+    from .configuration_gpt2moe import *
+    from .modeling_gpt2moe import *
     from .tokenization_gpt2 import *
     from .tokenization_gpt2_fast import *
 else:

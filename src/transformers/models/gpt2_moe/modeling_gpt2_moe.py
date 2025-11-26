@@ -53,7 +53,7 @@ from ...utils import (
     can_return_tuple,
     logging,
 )
-from .configuration_gpt2_moe import GPT2MoEConfig
+from .configuration_gpt2moe import GPT2MoEConfig
 from typing import Tuple
 import torch.nn.functional as F
 
