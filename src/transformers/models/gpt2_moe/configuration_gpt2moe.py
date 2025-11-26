@@ -94,7 +94,7 @@ class GPT2MoEConfig(PretrainedConfig):
 
         self.scale_down_ffn = scale_down_ffn
         self.output_router_logits = output_router_logits
-        self.hidden_act = "gelu_new"
+        self.hidden_act = hidden_act
 
         super().__init__(
             bos_token_id=bos_token_id,
