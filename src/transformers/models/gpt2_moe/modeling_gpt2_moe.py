@@ -94,8 +94,8 @@ def load_balancing_loss_func(
         The auxiliary loss.
     """
 
-    print("LB gate logits", gate_logits.shape)
-    print("LB attention_mask", attention_mask.shape)
+    print("LB gate logits", gate_logits)
+    print("LB attention_mask", attention_mask)
     if gate_logits is None or not isinstance(gate_logits, tuple):
         return 0
 
@@ -146,14 +146,12 @@ def load_balancing_loss_func(
             .to(compute_device)
         )
 
-        print(
-            "router_per_expert_attention_mask", router_per_expert_attention_mask.shape
-        )
+        print("router_per_expert_attention_mask", router_per_expert_attention_mask)
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.sum(
             routing_weights * router_per_expert_attention_mask, dim=0
         ) / torch.sum(router_per_expert_attention_mask, dim=0)
-        print("router_prob_per_expert", router_prob_per_expert.shape)
+        print("router_prob_per_expert", router_prob_per_expert)
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
     print("overall_loss", overall_loss)
 
@@ -485,7 +483,7 @@ class GPT2MoEFeedForward(nn.Module):
 
 
 # from org
-class GPT2MoESparseMoeBlock(nn.Module):
+class GPT2SparseMoEBlock(nn.Module):
     """This class implements the Mixture-Of-Experts derived from Mixtral."""
 
     def __init__(self, intermediate_size, config):
@@ -558,7 +556,7 @@ class GPT2MoESparseMoeBlock(nn.Module):
         final_hidden_states = final_hidden_states.reshape(
             batch_size, sequence_length, hidden_dim
         )
-        print("router_logits in sparse MoE block", router_logits.shape, router_logits)
+        print("router_logits in sparse MoE block", router_logits)
         return final_hidden_states, router_logits
 
 
@@ -577,7 +575,7 @@ class GPT2MoEDecoderLayer(nn.Module):
         self.attn = GPT2Attention(config=config, layer_idx=layer_idx)
         self.ln_2 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
 
-        self.moe = GPT2MoESparseMoeBlock(inner_dim, config)
+        self.moe = GPT2SparseMoEBlock(inner_dim, config)
 
     def forward(
         self,
@@ -611,7 +609,10 @@ class GPT2MoEDecoderLayer(nn.Module):
         hidden_states, router_logits = self.moe(hidden_states)
         hidden_states = residual + hidden_states
 
-        print("mystery router_logits", router_logits.shape, router_logits)
+        print(
+            "mystery router_logits",
+            router_logits,
+        )
         return hidden_states  # , router_logits
 
 
@@ -630,7 +631,7 @@ class GPT2MoEPreTrainedModel(PreTrainedModel):
     _supports_flash_attn_2 = True
     _supports_sdpa = True
     _can_record_outputs = {
-        "router_logits": OutputRecorder(GPT2MoESparseMoeBlock, index=1),
+        "router_logits": OutputRecorder(GPT2SparseMoEBlock, index=1),
         "hidden_states": GPT2MoEDecoderLayer,
         "attentions": GPT2Attention,
     }
@@ -766,7 +767,6 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
 
             print(
                 "router_logits in GPT2MoEModel forward",
-                router_logits.shape,
                 router_logits,
             )
 
@@ -859,7 +859,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        print("router logits", outputs.router_logits.shape)
+        print("router logits", outputs.router_logits)
 
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
@@ -874,7 +874,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits, labels, self.vocab_size, **kwargs)
 
-        print("loss", loss)
+        print("loss from causal forward", loss)
         aux_loss = None
         if output_router_logits:
             aux_loss = load_balancing_loss_func(
@@ -883,7 +883,7 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
                 self.k,
                 attention_mask,
             )
-            print("aux_loss", aux_loss)
+            print("aux_loss from causal forward", aux_loss)
             if labels is not None:
                 loss += self.router_aux_loss_coef * aux_loss.to(
                     loss.device
