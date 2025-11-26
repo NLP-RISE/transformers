@@ -65,6 +65,119 @@ from transformers.utils.generic import check_model_inputs
 logger = logging.get_logger(__name__)
 
 
+# from org
+class GPT2MoEFeedForward(nn.Module):
+    """This class implements the feed-forward network derived from Llama2."""
+
+    def __init__(self, intermediate_size, config):
+        super().__init__()
+
+        self.config = config
+
+        self.w1 = nn.Linear(config.n_embd, intermediate_size, bias=False)
+        self.w2 = nn.Linear(intermediate_size, config.n_embd, bias=False)
+        self.w3 = nn.Linear(config.n_embd, intermediate_size, bias=False)
+        self.activation = nn.SiLU()
+        # self.dropout = nn.Dropout(config.resid_pdrop)
+
+    def forward(self, hidden_states):
+        hidden_states = self.w2(
+            self.activation(self.w1(hidden_states)) * self.w3(hidden_states)
+        )
+        # hidden_states = self.dropout(hidden_states)  # ??? is this the problem?
+        return hidden_states
+
+
+# from org
+class GPT2SparseMoEBlock(nn.Module):
+    """This class implements the Mixture-Of-Experts derived from Mixtral."""
+
+    def __init__(self, intermediate_size, config):
+        super().__init__()
+        self.config = config
+
+        self.num_expert = config.n_expert
+        self.k = config.top_k_expert
+
+        self.experts = nn.ModuleList(
+            [
+                GPT2MoEFeedForward(intermediate_size, config)
+                for _ in range(self.num_expert)
+            ]
+        )
+
+        self.gating_network = nn.Linear(
+            config.n_embd,
+            self.num_expert,
+            bias=False,
+        )
+
+    def forward(
+        self, hidden_states: Optional[Tuple[torch.FloatTensor]]
+    ) -> torch.FloatTensor:
+        batch_size, sequence_length, hidden_dim = hidden_states.shape
+        hidden_states = hidden_states.view(-1, hidden_dim)
+
+        router_logits = self.gating_network(hidden_states)
+
+        # print("router logits from gating function", type(router_logits))
+        # print("printout", router_logits)
+
+        router_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
+        routing_weights, selected_experts = torch.topk(router_weights, k=self.k, dim=-1)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        routing_weights = routing_weights.to(hidden_states.dtype)
+
+        final_hidden_states = torch.zeros(
+            (batch_size * sequence_length, hidden_dim),
+            dtype=hidden_states.dtype,
+            device=hidden_states.device,
+        )
+
+        # One hot encode the selected experts to create an expert mask
+        # this will be used to easily index which expert is going to be
+        # sollicitated
+        expert_mask = torch.nn.functional.one_hot(
+            selected_experts, num_classes=self.num_expert
+        ).permute(2, 1, 0)
+
+        expert_hitted = (
+            (expert_mask.sum(dim=(-1, -2)) > 0).nonzero(as_tuple=True)[0].tolist()
+        )
+        for expert_idx in expert_hitted:
+            expert_layer = self.experts[expert_idx]
+            idx, top_x = torch.where(expert_mask[expert_idx])
+            # Index the correct hidden states and compute the expert hidden
+            # state for the current expert. We need to make sure to multiply
+            # the output hidden states by `routing_weights` on the
+            # corresponding tokens (top-1 and top-2)
+            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
+            current_hidden_states = (
+                expert_layer(current_state) * routing_weights[top_x, idx, None]
+            )
+
+            # However `index_add_` only support torch tensors for indexing so
+            # we'll use the `top_x` tensor here.
+            final_hidden_states.index_add_(
+                0, top_x, current_hidden_states.to(hidden_states.dtype)
+            )
+
+        final_hidden_states = final_hidden_states.reshape(
+            batch_size, sequence_length, hidden_dim
+        )
+        # print(
+        #    "router_logits in sparse MoE block",
+        #    type(router_logits),
+        #    "will be returned as tuple",
+        # )
+        return final_hidden_states, router_logits
+
+    # , (
+    #        router_logits,
+    #        router_logits,
+    #    )  # (router_logits, router_logits)
+
+
 # from. mixtral
 def load_balancing_loss_func(
     gate_logits: Union[torch.Tensor, tuple[torch.Tensor], None],
@@ -473,121 +586,6 @@ class GPT2Attention(nn.Module):
         attn_output = self.resid_dropout(attn_output)
 
         return attn_output, attn_weights
-
-
-# from org
-class GPT2MoEFeedForward(nn.Module):
-    """This class implements the feed-forward network derived from Llama2."""
-
-    def __init__(self, intermediate_size, config):
-        super().__init__()
-
-        self.config = config
-
-        self.w1 = nn.Linear(config.n_embd, intermediate_size, bias=False)
-        self.w2 = nn.Linear(intermediate_size, config.n_embd, bias=False)
-        self.w3 = nn.Linear(config.n_embd, intermediate_size, bias=False)
-        self.activation = nn.SiLU()
-        self.dropout = nn.Dropout(config.resid_pdrop)
-
-    def forward(
-        self, hidden_states: Optional[Tuple[torch.FloatTensor]]
-    ) -> torch.FloatTensor:
-        hidden_states = self.w2(
-            self.activation(self.w1(hidden_states)) * self.w3(hidden_states)
-        )
-        hidden_states = self.dropout(hidden_states)
-        return hidden_states
-
-
-# from org
-class GPT2SparseMoEBlock(nn.Module):
-    """This class implements the Mixture-Of-Experts derived from Mixtral."""
-
-    def __init__(self, intermediate_size, config):
-        super().__init__()
-        self.config = config
-
-        self.num_expert = config.n_expert
-        self.k = config.top_k_expert
-
-        self.experts = nn.ModuleList(
-            [
-                GPT2MoEFeedForward(intermediate_size, config)
-                for _ in range(self.num_expert)
-            ]
-        )
-
-        self.gating_network = nn.Linear(
-            config.n_embd,
-            self.num_expert,
-            bias=False,
-        )
-
-    def forward(
-        self, hidden_states: Optional[Tuple[torch.FloatTensor]]
-    ) -> torch.FloatTensor:
-        batch_size, sequence_length, hidden_dim = hidden_states.shape
-        hidden_states = hidden_states.view(-1, hidden_dim)
-
-        router_logits = self.gating_network(hidden_states)
-
-        # print("router logits from gating function", type(router_logits))
-        # print("printout", router_logits)
-
-        router_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(router_weights, k=self.k, dim=-1)
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(hidden_states.dtype)
-
-        final_hidden_states = torch.zeros(
-            (batch_size * sequence_length, hidden_dim),
-            dtype=hidden_states.dtype,
-            device=hidden_states.device,
-        )
-
-        # One hot encode the selected experts to create an expert mask
-        # this will be used to easily index which expert is going to be
-        # sollicitated
-        expert_mask = torch.nn.functional.one_hot(
-            selected_experts, num_classes=self.num_expert
-        ).permute(2, 1, 0)
-
-        expert_hitted = (
-            (expert_mask.sum(dim=(-1, -2)) > 0).nonzero(as_tuple=True)[0].tolist()
-        )
-        for expert_idx in expert_hitted:
-            expert_layer = self.experts[expert_idx]
-            idx, top_x = torch.where(expert_mask[expert_idx])
-            # Index the correct hidden states and compute the expert hidden
-            # state for the current expert. We need to make sure to multiply
-            # the output hidden states by `routing_weights` on the
-            # corresponding tokens (top-1 and top-2)
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-            current_hidden_states = (
-                expert_layer(current_state) * routing_weights[top_x, idx, None]
-            )
-
-            # However `index_add_` only support torch tensors for indexing so
-            # we'll use the `top_x` tensor here.
-            final_hidden_states.index_add_(
-                0, top_x, current_hidden_states.to(hidden_states.dtype)
-            )
-
-        final_hidden_states = final_hidden_states.reshape(
-            batch_size, sequence_length, hidden_dim
-        )
-        # print(
-        #    "router_logits in sparse MoE block",
-        #    type(router_logits),
-        #    "will be returned as tuple",
-        # )
-        return final_hidden_states, router_logits
-
-    # , (
-    #        router_logits,
-    #        router_logits,
-    #    )  # (router_logits, router_logits)
 
 
 # from org
