@@ -754,7 +754,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         position_embeddings = self.wpe(position_ids)
 
         for decoder_layer in self.h[: self.config.n_layer]:
-            hidden_states, router_logits = decoder_layer(
+            hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=position_embeddings,
                 attention_mask=causal_mask,
