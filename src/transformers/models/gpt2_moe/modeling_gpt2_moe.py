@@ -50,7 +50,7 @@ from ...pytorch_utils import Conv1D
 from ...utils import (
     ModelOutput,
     auto_docstring,
-    can_return_tuple
+    can_return_tuple,
     logging,
 )
 from .configuration_gpt2_moe import GPT2MoEConfig
@@ -582,9 +582,9 @@ class GPT2SparseMoEBlock(nn.Module):
         #    type(router_logits),
         #    "will be returned as tuple",
         # )
-        return final_hidden_states
-    
-    #, (
+        return final_hidden_states, router_logits
+
+    # , (
     #        router_logits,
     #        router_logits,
     #    )  # (router_logits, router_logits)
@@ -636,7 +636,7 @@ class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.ln_2(hidden_states)
-        hidden_states, router_logits = self.moe(hidden_states)
+        hidden_states, _ = self.moe(hidden_states)
         hidden_states = residual + hidden_states
 
         # print(
@@ -644,7 +644,7 @@ class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
         #    type(router_logits),
         # )
 
-        return hidden_states, router_logits
+        return hidden_states
 
 
 # from org
@@ -786,7 +786,7 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
         position_embeddings = self.wpe(position_ids)
 
         for decoder_layer in self.h[: self.config.n_layer]:
-            hidden_states, router_logits = decoder_layer(
+            hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=position_embeddings,
                 attention_mask=causal_mask,
