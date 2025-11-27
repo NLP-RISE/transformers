@@ -17,25 +17,18 @@
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Optional, Union
 
 import torch
+import torch.nn.functional as F
 from torch import nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from ...activations import ACT2FN, get_activation
+from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, EncoderDecoderCache
 from ...generation import GenerationMixin
 from ...masking_utils import create_causal_mask
-from ...modeling_attn_mask_utils import _prepare_4d_attention_mask_for_sdpa
 from ...modeling_layers import GradientCheckpointingLayer
 from ...modeling_outputs import (
-    BaseModelOutputWithPastAndCrossAttentions,
-    CausalLMOutputWithCrossAttentions,
-    QuestionAnsweringModelOutput,
-    SequenceClassifierOutputWithPast,
-    TokenClassifierOutput,
     MoeModelOutputWithPast,
     MoeCausalLMOutputWithPast,
 )
@@ -46,7 +39,6 @@ from ...modeling_layers import (
     GradientCheckpointingLayer,
 )
 from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from ...pytorch_utils import Conv1D
 from ...utils import (
     ModelOutput,
     auto_docstring,
@@ -55,7 +47,11 @@ from ...utils import (
 )
 from .configuration_gpt2moe import GPT2MoEConfig
 from typing import Tuple
-import torch.nn.functional as F
+from ...pytorch_utils import (
+    Conv1D,
+    find_pruneable_heads_and_indices,
+    prune_conv1d_layer,
+)
 
 from ...processing_utils import Unpack
 from ...utils import TransformersKwargs
@@ -89,9 +85,28 @@ class GPT2MoEFeedForward(nn.Module):
         return current_hidden_states
 
 
-# from org
+class GPT2MLP(nn.Module):
+    def __init__(self, intermediate_size, config):
+        super().__init__()
+        embed_dim = config.hidden_size
+        self.c_fc = Conv1D(intermediate_size, embed_dim)
+        self.c_proj = Conv1D(embed_dim, intermediate_size)
+        self.act = ACT2FN[config.activation_function]
+        self.dropout = nn.Dropout(config.resid_pdrop)
+
+    def forward(
+        self, hidden_states: Optional[tuple[torch.FloatTensor]]
+    ) -> torch.FloatTensor:
+        hidden_states = self.c_fc(hidden_states)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.c_proj(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        return hidden_states
+
+
+# from https://github.com/reshalfahsi/gpt2moe-instruct and mixtral
 class GPT2SparseMoEBlock(nn.Module):
-    """This class implements the Mixture-Of-Experts derived from Mixtral."""
+    """This class implements the Mixture-Of-Experts derived from Mixtral (https://github.com/reshalfahsi/gpt2moe-instruct) with slight modifications. It ignores jitter noise -- otherwise exactly identical to Mixtral's implementation."""
 
     def __init__(self, intermediate_size, config):
         super().__init__()
@@ -101,10 +116,7 @@ class GPT2SparseMoEBlock(nn.Module):
         self.k = config.top_k_expert
 
         self.experts = nn.ModuleList(
-            [
-                GPT2MoEFeedForward(intermediate_size, config)
-                for _ in range(self.num_expert)
-            ]
+            [GPT2MLP(intermediate_size, config) for _ in range(self.num_expert)]
         )
 
         self.gating_network = nn.Linear(
@@ -120,9 +132,6 @@ class GPT2SparseMoEBlock(nn.Module):
         hidden_states = hidden_states.view(-1, hidden_dim)
 
         router_logits = self.gating_network(hidden_states)
-
-        # print("router logits from gating function", type(router_logits))
-        # print("printout", router_logits)
 
         router_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(router_weights, k=self.k, dim=-1)
@@ -142,10 +151,10 @@ class GPT2SparseMoEBlock(nn.Module):
             selected_experts, num_classes=self.num_expert
         ).permute(2, 1, 0)
 
-        expert_hitted = (
+        expert_hit = (
             (expert_mask.sum(dim=(-1, -2)) > 0).nonzero(as_tuple=True)[0].tolist()
         )
-        for expert_idx in expert_hitted:
+        for expert_idx in expert_hit:
             expert_layer = self.experts[expert_idx]
             idx, top_x = torch.where(expert_mask[expert_idx])
             # Index the correct hidden states and compute the expert hidden
@@ -166,20 +175,9 @@ class GPT2SparseMoEBlock(nn.Module):
         final_hidden_states = final_hidden_states.reshape(
             batch_size, sequence_length, hidden_dim
         )
-        # print(
-        #    "router_logits in sparse MoE block",
-        #    type(router_logits),
-        #    "will be returned as tuple",
-        # )
         return final_hidden_states, router_logits
 
-    # , (
-    #        router_logits,
-    #        router_logits,
-    #    )  # (router_logits, router_logits)
 
-
-# from. mixtral
 def load_balancing_loss_func(
     gate_logits: Union[torch.Tensor, tuple[torch.Tensor], None],
     num_experts: Optional[int] = None,
@@ -209,49 +207,32 @@ def load_balancing_loss_func(
     Returns:
         The auxiliary loss.
     """
-
-    # print("LB gate logits", type(gate_logits))
-    # print("LB attention_mask", attention_mask)
     if gate_logits is None or not isinstance(gate_logits, tuple):
-        # print(
-        #    "gate_logits is None or not isinstance(gate_logits, tuple)",
-        #    type(gate_logits),
-        # )
         return 0
 
     if isinstance(gate_logits, tuple):
-        # print("gate logits are tuple")
         compute_device = gate_logits[0].device
-        # print("compute device", compute_device)
         concatenated_gate_logits = torch.cat(
             [layer_gate.to(compute_device) for layer_gate in gate_logits], dim=0
         )
-        # print("concat logits", type(concatenated_gate_logits))
 
     routing_weights = torch.nn.functional.softmax(concatenated_gate_logits, dim=-1)
 
-    # print("routing_weights", routing_weights)
     _, selected_experts = torch.topk(routing_weights, top_k, dim=-1)
 
-    # print("selected_experts", selected_experts)
     expert_mask = torch.nn.functional.one_hot(selected_experts, num_experts)
-    # print("expert_mask", type(expert_mask))
     if attention_mask is None:
-        # print("no attention mask!!")
         # Compute the percentage of tokens routed to each experts
         tokens_per_expert = torch.mean(expert_mask.float(), dim=0)
 
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.mean(routing_weights, dim=0)
     else:
-        # print("attention mask present")
         batch_size, sequence_length = attention_mask.shape
         num_hidden_layers = concatenated_gate_logits.shape[0] // (
             batch_size * sequence_length
         )
 
-        # print("batch_size, sequence_length", batch_size, sequence_length)
-        # print("num_hidden_layers", num_hidden_layers)
         # Compute the mask that masks all padding tokens as 0 with the same shape of expert_mask
         expert_attention_mask = (
             attention_mask[None, :, :, None, None]
@@ -261,7 +242,6 @@ def load_balancing_loss_func(
             .reshape(-1, top_k, num_experts)
             .to(compute_device)
         )
-        # print("expert_attention_mask", expert_attention_mask)
 
         # Compute the percentage of tokens routed to each experts
         tokens_per_expert = torch.sum(
@@ -276,17 +256,11 @@ def load_balancing_loss_func(
             .to(compute_device)
         )
 
-        # print(
-        #    "router_per_expert_attention_mask", type(router_per_expert_attention_mask)
-        # )
         # Compute the average probability of routing to these experts
         router_prob_per_expert = torch.sum(
             routing_weights * router_per_expert_attention_mask, dim=0
         ) / torch.sum(router_per_expert_attention_mask, dim=0)
-        # print("router_prob_per_expert", type(router_prob_per_expert))
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
-    # print("overall_loss", overall_loss)
-    # print("returning", overall_loss * num_experts)
     return overall_loss * num_experts
 
 
@@ -589,7 +563,7 @@ class GPT2Attention(nn.Module):
         return attn_output, attn_weights
 
 
-# from org
+# From MixtralDecoderLayer with modifications to attention and normalization
 class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx=None):
         super().__init__()
@@ -637,11 +611,6 @@ class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
         hidden_states = self.ln_2(hidden_states)
         hidden_states, _ = self.moe(hidden_states)
         hidden_states = residual + hidden_states
-
-        # print(
-        #    "router logits of layer",
-        #    type(router_logits),
-        # )
 
         return hidden_states
 
@@ -795,15 +764,12 @@ class GPT2MoEModel(GPT2MoEPreTrainedModel):
                 cache_position=cache_position,
                 **kwargs,
             )
-            # print("tmp router logits", type(router_logits))
 
         hidden_states = self.ln_f(hidden_states)
-        # print("router_logits out of gpt2moeblock", type(router_logits))
 
         return MoeModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=past_key_values,
-            # router_logits=router_logits,
         )
 
 
@@ -876,8 +842,6 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             else self.config.output_router_logits
         )
 
-        # print("output_router_logits?", type(output_router_logits))
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs: MoeModelOutputWithPast = self.transformer(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -889,8 +853,6 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
             cache_position=cache_position,
             **kwargs,
         )
-
-        # print("router logits", type(outputs.router_logits))
 
         hidden_states = outputs.last_hidden_state
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
