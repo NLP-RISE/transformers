@@ -116,7 +116,10 @@ class GPT2SparseMoEBlock(nn.Module):
         self.k = config.top_k_expert
 
         self.experts = nn.ModuleList(
-            [GPT2MLP(intermediate_size, config) for _ in range(self.num_expert)]
+            [
+                GPT2MoEFeedForward(intermediate_size, config)
+                for _ in range(self.num_expert)
+            ]
         )
 
         self.gating_network = nn.Linear(
