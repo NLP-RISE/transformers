@@ -116,7 +116,7 @@ class GPT2SparseMoEBlock(nn.Module):
         self.k = config.top_k_expert
 
         self.experts = nn.ModuleList(
-            [GPT2MLP(intermediate_size, config) for _ in range(self.num_expert)]
+            [GPT2MoEFeedForwards(intermediate_size, config) for _ in range(self.num_expert)]
         )
 
         self.gating_network = nn.Linear(
@@ -131,7 +131,7 @@ class GPT2SparseMoEBlock(nn.Module):
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
 
-        router_logits = self.gating_network(hidden_states)
+        router_logits = self.gating_nsetwork(hidden_states)
 
         router_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(router_weights, k=self.k, dim=-1)
