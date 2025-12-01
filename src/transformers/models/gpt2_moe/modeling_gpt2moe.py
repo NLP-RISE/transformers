@@ -61,30 +61,6 @@ from transformers.utils.generic import check_model_inputs
 logger = logging.get_logger(__name__)
 
 
-# from org
-class GPT2MoEFeedForward(nn.Module):
-    """This class implements the feed-forward network derived from Llama2."""
-
-    def __init__(self, intermediate_size, config: GPT2MoEConfig):
-        super().__init__()
-        self.ffn_dim = intermediate_size
-        self.hidden_dim = config.hidden_size
-
-        self.w1 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
-        self.w2 = nn.Linear(self.ffn_dim, self.hidden_dim, bias=False)
-        self.w3 = nn.Linear(self.hidden_dim, self.ffn_dim, bias=False)
-
-        self.act_fn = ACT2FN[config.hidden_act]
-        print("self.act_fn", self.act_fn)
-
-    def forward(self, hidden_states):
-        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(
-            hidden_states
-        )
-        current_hidden_states = self.w2(current_hidden_states)
-        return current_hidden_states
-
-
 class GPT2MLP(nn.Module):
     def __init__(self, intermediate_size, config):
         super().__init__()
@@ -568,11 +544,7 @@ class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         hidden_size = config.hidden_size
-        inner_dim = (
-            config.n_inner
-            if config.n_inner is not None
-            else hidden_size // config.scale_down_ffn
-        )
+        inner_dim = config.n_inner if config.n_inner is not None else hidden_size * 2
 
         self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = GPT2Attention(config=config, layer_idx=layer_idx)

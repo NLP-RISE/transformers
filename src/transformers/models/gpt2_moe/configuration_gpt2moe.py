@@ -30,6 +30,7 @@ class GPT2MoEConfig(PretrainedConfig):
         "max_position_embeddings": "n_positions",
         "num_attention_heads": "n_head",
         "num_hidden_layers": "n_layer",
+        "intermediate_size": "n_inner",
     }
 
     def __init__(
@@ -39,7 +40,7 @@ class GPT2MoEConfig(PretrainedConfig):
         n_embd=768,
         n_layer=12,
         n_head=12,
-        n_inner=None,
+        n_inner=1536,
         resid_pdrop=0.1,
         embd_pdrop=0.1,
         attn_pdrop=0.1,
