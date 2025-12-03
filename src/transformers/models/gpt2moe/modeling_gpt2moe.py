@@ -839,7 +839,6 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
         if labels is not None:
             loss = self.loss_function(logits, labels, self.vocab_size, **kwargs)
 
-        print("loss from causal forward", loss)
         aux_loss = None
         if output_router_logits:
             aux_loss = load_balancing_loss_func(
@@ -848,7 +847,6 @@ class GPT2MoEForCausalLM(GPT2MoEPreTrainedModel, GenerationMixin):
                 self.k,
                 attention_mask,
             )
-            print("aux_loss from causal forward", aux_loss)
             if labels is not None:
                 loss += self.router_aux_loss_coef * aux_loss.to(
                     loss.device
