@@ -544,7 +544,7 @@ class GPT2MoEDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx=None):
         super().__init__()
         hidden_size = config.hidden_size
-        inner_dim = config.n_inner if config.n_inner is not None else hidden_size * 2
+        inner_dim = config.n_inner
 
         self.ln_1 = nn.LayerNorm(hidden_size, eps=config.layer_norm_epsilon)
         self.attn = GPT2Attention(config=config, layer_idx=layer_idx)
