@@ -58,8 +58,11 @@ class GPT2MoEConfig(PretrainedConfig):
         scale_down_ffn=1,
         output_router_logits=True,
         hidden_act="gelu_new",
+        random_routing=False,
+        exclude_experts=[],
         **kwargs,
     ):
+        
         self.vocab_size = vocab_size
         self.n_positions = n_positions
         self.n_embd = n_embd
@@ -86,6 +89,8 @@ class GPT2MoEConfig(PretrainedConfig):
         self.scale_down_ffn = scale_down_ffn
         self.output_router_logits = output_router_logits
         self.hidden_act = hidden_act
+        self.random_routing = random_routing
+        self.exclude_experts = exclude_experts
 
         super().__init__(
             bos_token_id=bos_token_id,

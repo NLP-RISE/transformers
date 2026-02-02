@@ -18,7 +18,7 @@
 import math
 from collections.abc import Callable
 from typing import Optional, Union
-
+import random 
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -101,6 +101,7 @@ class GPT2SparseMoEBlock(nn.Module):
             bias=False,
         )
 
+
     def forward(
         self, hidden_states: Optional[Tuple[torch.FloatTensor]]
     ) -> torch.FloatTensor:
@@ -109,11 +110,32 @@ class GPT2SparseMoEBlock(nn.Module):
 
         router_logits = self.gating_network(hidden_states)
 
+        #print("self.config.exclude_experts", self.config.exclude_experts)
+        for x in self.config.exclude_experts:
+            #print("excluding", x)
+            router_logits[:, x:x+1] = torch.tensor(float('-inf'))
         router_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
+
         routing_weights, selected_experts = torch.topk(router_weights, k=self.k, dim=-1)
+        #print("original selection of experts")
+        #print(selected_experts)
+        #print("=============")
+
+        if self.config.random_routing:
+            selected_experts = torch.randint(low=0, high=self.num_expert, size=(routing_weights.shape[0],self.k)).to(device=selected_experts.device)
+
+            #print("randomly selected experts")
+            #print(selected_experts)
+            #print('---------')
+            selected_routing_weights = torch.empty(routing_weights.shape[0], self.k).to(device=router_weights.device)
+            for i in range(len(routing_weights)):
+                target_weights = torch.index_select(router_weights[i], 0, selected_experts[i])
+                selected_routing_weights[i, :] = target_weights
+
+            router_weights = selected_routing_weights.to(device=router_weights.device)
+
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         routing_weights = routing_weights.to(hidden_states.dtype)
-
         final_hidden_states = torch.zeros(
             (batch_size * sequence_length, hidden_dim),
             dtype=hidden_states.dtype,
@@ -126,13 +148,15 @@ class GPT2SparseMoEBlock(nn.Module):
         expert_mask = torch.nn.functional.one_hot(
             selected_experts, num_classes=self.num_expert
         ).permute(2, 1, 0)
-
+        
         expert_hit = (
             (expert_mask.sum(dim=(-1, -2)) > 0).nonzero(as_tuple=True)[0].tolist()
         )
+
         for expert_idx in expert_hit:
             expert_layer = self.experts[expert_idx]
             idx, top_x = torch.where(expert_mask[expert_idx])
+            # print("idx, top_x", idx, top_x)
             # Index the correct hidden states and compute the expert hidden
             # state for the current expert. We need to make sure to multiply
             # the output hidden states by `routing_weights` on the
@@ -144,6 +168,8 @@ class GPT2SparseMoEBlock(nn.Module):
 
             # However `index_add_` only support torch tensors for indexing so
             # we'll use the `top_x` tensor here.
+
+            # inspect what happens to the hidden states, maybe they are not selected correctly...
             final_hidden_states.index_add_(
                 0, top_x, current_hidden_states.to(hidden_states.dtype)
             )
@@ -151,6 +177,8 @@ class GPT2SparseMoEBlock(nn.Module):
         final_hidden_states = final_hidden_states.reshape(
             batch_size, sequence_length, hidden_dim
         )
+        # print("router logits", type(router_logits), router_logits)
+        #print("end of foward pass")
         return final_hidden_states, router_logits
 
 
@@ -237,6 +265,8 @@ def load_balancing_loss_func(
             routing_weights * router_per_expert_attention_mask, dim=0
         ) / torch.sum(router_per_expert_attention_mask, dim=0)
     overall_loss = torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0))
+
+    # print("overall_loss * num_experts", overall_loss, num_experts, overall_loss* num_experts)
     return overall_loss * num_experts
 
 
